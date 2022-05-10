@@ -20,6 +20,8 @@
   "dependencies": {
     "commander": "^9.2.0",
     "esprima": "^4.0.1",
-    "node-estree": "^3.1.0"
+    "node-estree": "^3.1.0",
+    "source-map": "0.7.3",
+    "terser": "^5.13.1"
   }
 }
