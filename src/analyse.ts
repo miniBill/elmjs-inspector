@@ -19,19 +19,21 @@ function* yieldElmJsDefinitionInfos(script: Esprima.Program) {
 
 function* yieldElmJsStatements(script: Esprima.Program) {
   for (const e of script.body) {
-    if (e.type === 'ExpressionStatement'
-        && e.expression.type === 'CallExpression'
-        && e.expression.callee.type === 'FunctionExpression') {
-        yield* e.expression.callee.body.body;
+    if (
+      e.type === 'ExpressionStatement' &&
+      e.expression.type === 'CallExpression' &&
+      e.expression.callee.type === 'FunctionExpression'
+    ) {
+      yield* e.expression.callee.body.body;
     }
-};
+  }
 }
 
 function* yieldFunctionDeclarationInfo(statement: ESTree.Statement) {
   if (statement.type === 'FunctionDeclaration') {
     yield {
       name: statement.id.name,
-      range: statement.range
+      range: statement.range,
     };
   }
 }
@@ -42,7 +44,7 @@ function* yieldVariableDeclarationInfos(statement: ESTree.Statement) {
       if (declaration.id.type === 'Identifier') {
         yield {
           name: declaration.id.name,
-          range: declaration.range
+          range: declaration.range,
         };
       }
     }
@@ -73,31 +75,38 @@ async function withTerser<T>(
     module: true,
     compress: {
       pure_funcs: [
-        // "F2",
-        // "F3",
-        // "F4",
-        // "F5",
-        // "F6",
-        // "F7",
-        // "F8",
-        // "F9",
-        // "A2",
-        // "A3",
-        // "A4",
-        // "A5",
-        // "A6",
-        // "A7",
-        // "A8",
-        // "A9",
+        'F2',
+        'F3',
+        'F4',
+        'F5',
+        'F6',
+        'F7',
+        'F8',
+        'F9',
+        'A2',
+        'A3',
+        'A4',
+        'A5',
+        'A6',
+        'A7',
+        'A8',
+        'A9',
       ],
       pure_getters: true,
       keep_fargs: false,
       unsafe_comps: true,
       unsafe: true,
       passes: 2,
+      // This is not used for production builds, but it keeps the source map more consistent
+      inline: false,
     },
-    mangle: true,
+    mangle: false,
+    // mangle: true,
     sourceMap: true,
+    format: {
+      beautify: true,
+      indent_level: 0,
+    },
   });
   if (minifiedElm.code) {
     await promisify(FS.writeFile)('tersed.js', minifiedElm.code);
@@ -129,13 +138,16 @@ async function process(
   }
   const parsedCompressed = Esprima.parseScript(compressedCode, { range: true });
   const compressedSize = rangeSize(parsedCompressed.range);
-  const infos = Array.from(yieldElmJsDefinitionInfos(parsed));
+  let infos = Array.from(yieldElmJsDefinitionInfos(parsed));
 
   const compressedSplat = compressedCode.split('\n');
 
   const indexCache = {};
 
-  function indexToLineColumn(index: number) {
+  function indexToLineColumn(index: number, right: boolean) {
+    if (right) {
+      index--;
+    }
     const beforeSlice = code.slice(0, index);
     const splat = beforeSlice.split('\n');
     const line = splat.length; // 1-based
@@ -143,12 +155,12 @@ async function process(
     return { line: line, column: column };
   }
 
-  function compressIndex(index: number, left: boolean) {
+  function compressIndex(index: number, right: boolean) {
     if (!consumer) return index;
     if (index in indexCache) {
       return indexCache[index];
     }
-    const { line, column } = indexToLineColumn(index);
+    const { line, column } = indexToLineColumn(index, right);
     const mapped = consumer.generatedPositionFor({
       source: '0',
       line: line,
@@ -175,18 +187,24 @@ async function process(
     range: [number, number];
   }): [number, number] {
     const result: [number, number] = [
-      compressIndex(range[0], true),
-      compressIndex(range[1], false),
+      compressIndex(range[0], false),
+      compressIndex(range[1], true),
     ];
     if (rangeSize(result) < 0) {
+      if (
+        indexToLineColumn(range[0], false).line ==
+        indexToLineColumn(range[1], true).line
+      ) {
+        // This is just an "aliasing" declaration, we can just ignore it when calculating space used
+        return null;
+      }
       Console.log({
         name: name,
         range: range,
-        lineColumn: range.map(indexToLineColumn),
+        lineColumn: range.map((index, j) => indexToLineColumn(index, j == 1)),
 
         mapped: range.map((index, j) => {
-          const left = j == 0;
-          const { line, column } = indexToLineColumn(index + (left ? 0 : 1));
+          const { line, column } = indexToLineColumn(index, j == 1);
           const generated = consumer.generatedPositionFor({
             source: '0',
             line: line,
@@ -202,12 +220,18 @@ async function process(
         }),
         compressed: result,
       });
-      throw new Error('Invalid negative range');
+      return null;
+      // throw new Error('Invalid negative range');
       // return [result[1], result[0]];
     } else {
       return result;
     }
   }
+
+  infos = infos.filter((info) => {
+    let range = compressRange(info);
+    return info.name.indexOf('$') >= 0 && range != null;
+  });
 
   Console.log('Sorting');
   infos.sort((a, b) => {
