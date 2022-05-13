@@ -11,8 +11,9 @@ program
 program
   .command("analyze")
   .argument("<filename>", "The file to analyze")
-  .action((filename) => {
-    analyse(filename);
+  .option("-t --terser", "Run terser on the file before calculating the scores")
+  .action((filename, options) => {
+    analyse(filename, options);
   });
 
 program.parse();
